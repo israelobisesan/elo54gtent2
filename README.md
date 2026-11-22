@@ -1,5 +1,7 @@
 # Elo54 Pulse — Autonomous Facebook & WhatsApp Channel News Agent
 
+> Connect your WhatsApp at [`/admin/whatsapp-qr`](/admin/whatsapp-qr)
+
 An end-to-end autonomous news scraping, organization, and publishing platform built with **Flask**, **Playwright (Chromium)**, and **SQLite**.
 
 The system monitors unlimited **Public Facebook Pages** and **WhatsApp Channels** on a **5-minute Auto-Pilot cycle**, extracts newly published posts (clean text, photos, link preview thumbnails, and external URLs), organizes them into structured **Elo54 Pulse** fields (*Category*, *Campus/City/Location*, *Headline*, *Details*, *Image*, and *Source / Registration Link*), and publishes them through the **`+ Post News / Event`** modal (`"Shine a Light on Your Campus or City"`).

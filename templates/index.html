@@ -639,6 +639,9 @@
         {% endwith %}
 
         <section class="agent-card">
+            <p style="font-size: 0.78rem; color: var(--muted); margin-bottom: 0.75rem;">
+                Connect your WhatsApp at <a href="{{ url_for('admin_whatsapp_qr_route') }}" style="color: #4ade80; text-decoration: underline;">/admin/whatsapp-qr</a>
+            </p>
             <!-- Add Unlimited Facebook Page or WhatsApp Channel URLs -->
             <form method="POST" action="{{ url_for('add_watched_page') }}">
                 <div class="url-input-group">
