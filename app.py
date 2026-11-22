@@ -673,4 +673,5 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "5000"))
     debug_mode = os.getenv("FLASK_DEBUG", "0") == "1"
+    print(f"Starting Elo54 Pulse Server on http://{host}:{port} ...", flush=True)
     app.run(host=host, port=port, debug=debug_mode, use_reloader=False, threaded=True)
