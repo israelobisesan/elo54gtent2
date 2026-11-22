@@ -1,0 +1,21 @@
+# Environment & secrets
+.env
+
+# Persistent browser profile (contains personal WhatsApp Web session & Chromium cache)
+fb_profile/
+
+# Python virtual environments & bytecode
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Local SQLite databases & temporary runtime artifacts
+*.db
+*.db-journal
+*.db-wal
+temp_post_image.jpg
+static/wa_live.png
+static/wa_status.json
+static/uploads/*
+!static/uploads/.gitkeep
