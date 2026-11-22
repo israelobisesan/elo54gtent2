@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import requests
 from flask import (
     Flask,
+    Response,
     render_template,
     request,
     redirect,
@@ -375,6 +376,13 @@ def connect_whatsapp_route():
     return redirect(url_for("index", show_wa_qr="1"))
 
 
+@app.route("/admin/whatsapp-qr", methods=["GET"])
+def admin_whatsapp_qr_route():
+    """Private admin-only URL to link WhatsApp Web once via live QR stream."""
+    launch_agent_args(["--connect-whatsapp"])
+    return redirect(url_for("index", show_wa_qr="1"))
+
+
 @app.route("/wa-status", methods=["GET"])
 def wa_status_route():
     status_path = os.path.join(BASE_DIR, "static", "wa_status.json")
@@ -665,6 +673,141 @@ def index():
         headless_mode=headless_mode,
         seconds_until_next=seconds_until_next,
     )
+
+
+def format_rfc2822(date_str: str) -> str:
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        dt = datetime.now()
+    return dt.strftime("%a, %d %b %Y %H:%M:%S +0000")
+
+
+@app.route("/rss.xml", methods=["GET"])
+@app.route("/feed.xml", methods=["GET"])
+def rss_feed():
+    init_db()
+    loc_filter = request.args.get("location", "").strip().lower()
+    cat_filter = request.args.get("category", "").strip().lower()
+    base_url = request.host_url.rstrip("/")
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, author, category, campus_city, headline, content,
+                   image_filename, youtube_link, source_url, created_at
+            FROM posts
+            ORDER BY id DESC
+            LIMIT 100
+            """
+        ).fetchall()
+
+    items_xml = []
+    for post in rows:
+        cat = post["category"] or "News / Gist"
+        city = post["campus_city"] or ""
+        if loc_filter and loc_filter not in city.lower():
+            continue
+        if cat_filter and cat_filter not in cat.lower():
+            continue
+
+        title = html.escape(post["headline"] or (post["content"] or "Elo54 Update")[:120])
+        details = post["content"] or ""
+        escaped_details = html.escape(details)
+        link = html.escape(post["source_url"] or f"{base_url}/#post-{post['id']}")
+        pub_date = format_rfc2822(post["created_at"] or "")
+        img_name = post["image_filename"]
+        img_url = (
+            f"{base_url}{url_for('static', filename=f'uploads/{img_name}')}"
+            if img_name
+            else ""
+        )
+
+        enclosure_tag = (
+            f'<enclosure url="{html.escape(img_url)}" type="image/jpeg" length="0" />\n'
+            f'      <media:content url="{html.escape(img_url)}" medium="image" />'
+            if img_url
+            else ""
+        )
+        location_tag = (
+            f'<category domain="location">{html.escape(city)}</category>\n'
+            f'      <elo54:campus_city>{html.escape(city)}</elo54:campus_city>'
+            if city
+            else ""
+        )
+
+        html_body_parts = []
+        if city:
+            html_body_parts.append(f"<p><strong>Location:</strong> {html.escape(city)}</p>")
+        if details:
+            html_body_parts.append(f"<p>{html.escape(details).replace(chr(10), '<br/>')}</p>")
+        if post["source_url"]:
+            html_body_parts.append(
+                f'<p><strong>Source:</strong> <a href="{html.escape(post["source_url"])}">{html.escape(post["source_url"])}</a></p>'
+            )
+        if img_url:
+            html_body_parts.append(f'<p><img src="{html.escape(img_url)}" alt="{title}" /></p>')
+        cdata_html = "".join(html_body_parts).replace("]]>", "]]]]><![CDATA[>")
+
+        items_xml.append(
+            f"""    <item>
+      <title>{title}</title>
+      <link>{link}</link>
+      <guid isPermaLink="false">elo54-post-{post['id']}</guid>
+      <pubDate>{pub_date}</pubDate>
+      <category domain="category">{html.escape(cat)}</category>
+      {location_tag}
+      {enclosure_tag}
+      <description>{escaped_details}</description>
+      <content:encoded><![CDATA[{cdata_html}]]></content:encoded>
+    </item>"""
+        )
+
+    rss_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:media="http://search.yahoo.com/mrss/"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:elo54="https://elo54.com/ns"
+     xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Elo54 Pulse — Campus &amp; City News Feed</title>
+    <link>{html.escape(base_url)}/</link>
+    <description>Automated campus, city, and community news feed powered by Elo54 Pulse.</description>
+    <language>en-ng</language>
+    <atom:link href="{html.escape(base_url)}/rss.xml" rel="self" type="application/rss+xml" />
+{chr(10).join(items_xml)}
+  </channel>
+</rss>"""
+    return Response(rss_xml, mimetype="application/rss+xml; charset=utf-8")
+
+
+@app.route("/api/posts.json", methods=["GET"])
+def api_posts_json():
+    init_db()
+    base_url = request.host_url.rstrip("/")
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, author, category, campus_city, headline, content,
+                   image_filename, youtube_link, source_url, created_at
+            FROM posts
+            ORDER BY id DESC
+            LIMIT 100
+            """
+        ).fetchall()
+    items = []
+    for r in rows:
+        d = dict(r)
+        img_name = r["image_filename"]
+        d["image_url"] = (
+            f"{base_url}{url_for('static', filename=f'uploads/{img_name}')}"
+            if img_name
+            else None
+        )
+        items.append(d)
+    return jsonify({"count": len(items), "posts": items})
 
 
 if __name__ == "__main__":

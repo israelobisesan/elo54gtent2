@@ -695,7 +695,7 @@ def extract_latest_whatsapp_web_message(
         page.locator('canvas[aria-label*="Scan"]').count() > 0
         and page.locator('#pane-side, [aria-label="Chats"], [aria-label="Channels"]').count() == 0
     ):
-        raise RuntimeError("WhatsApp Web not linked yet — click 'Connect WhatsApp (One-Time QR)' first")
+        raise RuntimeError("Waiting for WhatsApp sync")
 
     # Wait briefly for any startup modal ('What's new on WhatsApp Web') to mount, then dismiss it
     human_delay(2.8, 3.6)

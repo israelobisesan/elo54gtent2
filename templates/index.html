@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Elo54 Pulse — Campus &amp; City News</title>
+    <link rel="alternate" type="application/rss+xml" title="Elo54 Pulse RSS Feed" href="{{ url_for('rss_feed') }}">
     <style>
         :root {
             --bg: #0b0e14;
@@ -623,9 +624,14 @@
                 <span>Elo54</span>
                 <span class="brand-pill">Pulse Auto-Pilot</span>
             </div>
-            <button type="button" id="open-post-modal-btn" class="btn-post-news" onclick="openPostModal()">
-                + Post News / Event
-            </button>
+            <div style="display: flex; align-items: center; gap: 0.65rem;">
+                <a href="{{ url_for('rss_feed') }}" target="_blank" rel="noopener noreferrer" style="padding: 0.58rem 1rem; border-radius: 999px; border: 1px solid var(--border); background: var(--input-bg); color: var(--orange); font-size: 0.85rem; font-weight: 700; text-decoration: none;">
+                    📡 RSS Feed
+                </a>
+                <button type="button" id="open-post-modal-btn" class="btn-post-news" onclick="openPostModal()">
+                    + Post News / Event
+                </button>
+            </div>
         </div>
     </header>
 
