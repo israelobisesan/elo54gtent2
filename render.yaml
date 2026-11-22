@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: elo54-pulse-agent
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: FLASK_SECRET_KEY
+        generateValue: true

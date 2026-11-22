@@ -277,7 +277,7 @@ def set_setting(key: str, value: str) -> None:
 
 
 def is_chromium_profile_active() -> bool:
-    """Return True if any chrome.exe process is currently using fb_profile."""
+    """Return True if any chrome/chromium process is currently using fb_profile."""
     try:
         if os.name == "nt":
             ps_cmd = (
@@ -292,6 +292,13 @@ def is_chromium_profile_active() -> bool:
             )
             count = int((res.stdout or "0").strip() or "0")
             return count > 0
+        else:
+            res = subprocess.run(
+                ["pgrep", "-f", "fb_profile"],
+                capture_output=True,
+                timeout=5,
+            )
+            return res.returncode == 0
     except Exception:
         pass
     return False
@@ -663,4 +670,7 @@ def index():
 if __name__ == "__main__":
     init_db()
     ensure_scheduler_started()
-    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "5000"))
+    debug_mode = os.getenv("FLASK_DEBUG", "0") == "1"
+    app.run(host=host, port=port, debug=debug_mode, use_reloader=False, threaded=True)

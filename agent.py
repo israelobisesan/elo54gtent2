@@ -30,7 +30,8 @@ TEMP_IMAGE_PATH = os.path.join(BASE_DIR, "temp_post_image.jpg")
 
 DEFAULT_FB_TARGET_URL = os.getenv("FB_TARGET_URL", "https://www.facebook.com/bbcnews").strip()
 SKIP_VIDEO_POSTS = os.getenv("SKIP_VIDEO_POSTS", "False").strip().lower() in ("true", "1", "yes")
-TEST_SITE_URL = "http://127.0.0.1:5000/"
+APP_PORT = os.getenv("PORT", "5000").strip() or "5000"
+TEST_SITE_URL = os.getenv("TEST_SITE_URL", f"http://127.0.0.1:{APP_PORT}/").strip()
 DEFAULT_FALLBACK_CITY = "Kano"
 
 UI_NOISE_LINES = {
@@ -97,6 +98,20 @@ def release_stale_profile_lock() -> None:
                 stderr=subprocess.DEVNULL,
                 timeout=8,
             )
+        else:
+            subprocess.run(
+                ["pkill", "-9", "-f", "fb_profile"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=8,
+            )
+            for lock_name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+                lock_path = os.path.join(PROFILE_DIR, lock_name)
+                if os.path.lexists(lock_path):
+                    try:
+                        os.remove(lock_path)
+                    except OSError:
+                        pass
     except Exception:
         pass
 
@@ -1027,7 +1042,7 @@ def connect_whatsapp_interactive() -> int:
             user_data_dir=PROFILE_DIR,
             headless=False,
             viewport={"width": 1100, "height": 820},
-            args=["--disable-notifications"],
+            args=["--disable-notifications", "--no-sandbox", "--disable-dev-shm-usage"],
         )
         page = context.pages[0] if context.pages else context.new_page()
         try:
@@ -1477,7 +1492,7 @@ def run_browser_session(mode: str, explicit_url: Optional[str] = None) -> int:
             user_data_dir=PROFILE_DIR,
             headless=headless,
             viewport={"width": 1280, "height": 880},
-            args=["--disable-notifications"],
+            args=["--disable-notifications", "--no-sandbox", "--disable-dev-shm-usage"],
         )
         page = context.pages[0] if context.pages else context.new_page()
 
