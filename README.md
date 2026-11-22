@@ -1,177 +1,194 @@
 # Elo54 Pulse — Autonomous Facebook & WhatsApp Channel News Agent
 
-An end-to-end autonomous news scraping, organization, and publishing system built with **Flask**, **Playwright (Chromium)**, and **SQLite**.
+An end-to-end autonomous news scraping, organization, and publishing platform built with **Flask**, **Playwright (Chromium)**, and **SQLite**.
 
-The system continuously monitors unlimited **Public Facebook Pages** and **WhatsApp Channels** every **5 minutes**, extracts newly published posts (text, images, link thumbnails, and external URLs), organizes them into structured **Elo54 Pulse** fields (*Category*, *Campus/City/Location*, *Headline*, *Details*, *Image*, and *Source / Registration Link*), and publishes them through the **`+ Post News / Event`** modal (`"Shine a Light on Your Campus or City"`).
+The system monitors unlimited **Public Facebook Pages** and **WhatsApp Channels** on a **5-minute Auto-Pilot cycle**, extracts newly published posts (clean text, photos, link preview thumbnails, and external URLs), organizes them into structured **Elo54 Pulse** fields (*Category*, *Campus/City/Location*, *Headline*, *Details*, *Image*, and *Source / Registration Link*), and publishes them through the **`+ Post News / Event`** modal (`"Shine a Light on Your Campus or City"`).
 
 ---
 
-## 1. Project Folder Structure
+## 1. Architecture & File Map
 
 ```text
 elo age/
-├── app.py                   # Flask Web Server + 5-Minute Background Auto-Pilot Scheduler
-├── agent.py                 # Playwright Autonomous Scraper, Organizer & Modal Publisher
-├── elo54_agent.py           # Standalone External Publisher for Live https://elo54.com
-├── requirements.txt         # Python package dependencies
-├── .env.example             # Environment variable template
-├── README.md                # Full architecture & usage documentation
-├── sandbox_posts.db         # SQLite database (published posts, watched links, settings)
-├── agent_memory.db          # SQLite deduplication database (SHA-256 seen_posts table)
-├── fb_profile/              # Persistent Chromium profile (stores WhatsApp Web linked session)
-├── static/
-│   ├── uploads/             # Uploaded & scraped post images
-│   ├── wa_live.png          # Live WhatsApp Web QR code stream image
-│   └── wa_status.json       # Live WhatsApp connection status
-└── templates/
-    ├── index.html           # Elo54 Pulse Frontpage + "+ Post News / Event" Modal + Watchlist
-    └── login.html           # Legacy login template (redirects straight to frontpage)
+├── app.py                # Flask web server, watchlist & feed routes, JSON API, 5-min Auto-Pilot thread
+├── agent.py              # Playwright scraper (Facebook + WhatsApp), organizer, deduplicator & modal publisher
+├── elo54_agent.py        # Standalone helper script to organize & prefill posts on https://elo54.com
+├── requirements.txt      # Python package dependencies
+├── .env.example          # Environment variable template
+├── Dockerfile            # Cloud Linux container image (Playwright + Xvfb virtual display)
+├── render.yaml           # Render Web Service deployment blueprint
+├── .dockerignore         # Docker build context exclusions
+├── .gitignore            # Git exclusions (.env, fb_profile/, *.db, runtime uploads)
+├── README.md             # Complete system documentation
+├── templates/
+│   ├── index.html        # Elo54 Pulse dashboard, "+ Post News / Event" modal, hidden admin QR modal, live feed
+│   └── login.html        # Legacy login template (routes redirect directly to frontpage)
+├── sandbox_posts.db      # SQLite DB: posts, watched_pages (FB & WA URLs), and settings (created at runtime)
+├── agent_memory.db       # SQLite DB: seen_posts (SHA-256 hashes to block duplicate reposts, created at runtime)
+├── fb_profile/           # Persistent Chromium browser profile (stores your linked WhatsApp Web session)
+└── static/
+    ├── uploads/          # Saved images downloaded from Facebook/WhatsApp or uploaded manually
+    ├── wa_live.png       # Latest screenshot of WhatsApp Web streamed for /admin/whatsapp-qr
+    └── wa_status.json    # Live status JSON ("starting" / "qr_ready" / "connected")
 ```
 
 ---
 
-## 2. How the System Works (Step-by-Step Pipeline)
+## 2. Database Schemas (`sandbox_posts.db` & `agent_memory.db`)
+
+### A. `sandbox_posts.db` (Managed by `init_db()` in `app.py`)
+1. **`posts` Table:**
+   * `id` (`INTEGER PRIMARY KEY AUTOINCREMENT`)
+   * `author` (`TEXT NOT NULL`)
+   * `category` (`TEXT DEFAULT 'News / Gist'` — `'News / Gist'`, `'Event'`, `'Opportunity'`)
+   * `campus_city` (`TEXT` — detected campus, Nigerian city/state, or foreign location; `NULL` when uncertain)
+   * `headline` (`TEXT` — factual headline, max 140 characters, no ALL CAPS)
+   * `content` (`TEXT NOT NULL` — cleaned post details)
+   * `image_filename` (`TEXT` — saved inside `static/uploads/`)
+   * `youtube_link` (`TEXT`)
+   * `source_url` (`TEXT` — extracted external article or registration link)
+   * `created_at` (`TEXT NOT NULL`)
+2. **`watched_pages` Table:**
+   * `id` (`INTEGER PRIMARY KEY AUTOINCREMENT`)
+   * `fb_url` (`TEXT UNIQUE NOT NULL` — stores both Facebook Page and WhatsApp Channel URLs)
+   * `label` (`TEXT NOT NULL` — resolved page/channel display name)
+   * `enabled` (`INTEGER DEFAULT 1` — `1` active, `0` paused)
+   * `last_checked_at` (`TEXT`)
+   * `last_status` (`TEXT DEFAULT 'Waiting for scan'`)
+   * `created_at` (`TEXT NOT NULL`)
+3. **`settings` Table:**
+   * `fb_target_url` (default target URL)
+   * `autopilot_enabled` (`"1"` ON by default)
+   * `poll_interval_minutes` (`"5"` minutes by default)
+   * `headless_mode` (`"0"` visible browser / Xvfb headed mode, `"1"` headless mode)
+
+### B. `agent_memory.db` (Managed by `init_memory_db()` in `agent.py`)
+* **`seen_posts` Table:**
+  * `post_hash` (`TEXT PRIMARY KEY` — SHA-256 hash of extracted post content + link)
+  * `post_preview` (`TEXT` — first 200 characters)
+  * `published_at` (`TIMESTAMP DEFAULT CURRENT_TIMESTAMP`)
+
+---
+
+## 3. End-to-End 5-Stage Automation Pipeline
 
 ```text
 +-------------------------------------------------------------------------+
-| 1. WATCHLIST & 5-MINUTE AUTO-PILOT SCHEDULER (app.py)                   |
-|    - Stores unlimited Facebook Page & WhatsApp Channel URLs             |
-|    - Background daemon thread triggers `python agent.py --watch-cycle`  |
-|      every 5 minutes (pauses automatically if browser is already open)  |
+| STAGE 1: WATCHLIST & 5-MINUTE AUTO-PILOT SCHEDULER (app.py)             |
+| • Add unlimited Facebook Page or WhatsApp Channel URLs via /watchlist/add|
+| • Resolves WhatsApp Channel names from public OpenGraph <meta> tags      |
+| • `background_autopilot_loop()` triggers `agent.py --watch-cycle`        |
+|   every 5 minutes (skips automatically if a Chromium instance is active) |
 +-------------------------------------------------------------------------+
                                     │
                                     ▼
 +-------------------------------------------------------------------------+
-| 2. SOURCE ROUTER (agent.py)                                             |
-|    Checks each active URL in `watched_pages`:                           |
+| STAGE 2: SOURCE ROUTER & SCRAPERS (agent.py)                            |
+| `process_single_watched_url()` routes by domain in `fb_profile/`:       |
 |                                                                         |
-|    ├── IF FACEBOOK PAGE (`facebook.com/...`):                           |
-|    │   • No Facebook login required                                     |
-|    │   • Navigates directly to the public Facebook Page                 |
-|    │   • Closes login/cookie popups & scrolls ~450px                    |
-|    │   • Expands "See more" on the top `[role="article"]` post          |
-|    │   • Extracts caption from `[data-ad-preview="message"]`            |
-|    │   • Strips UI noise ("See more", "See less", "View all X replies") |
-|    │   • Unwraps `l.facebook.com/l.php?u=...` external links            |
-|    │   • Downloads first content photo (`scontent`, >200x200px) OR      |
-|    │     falls back to the external link preview thumbnail (`fbcdn`)    |
-|    │                                                                    |
-|    └── IF WHATSAPP CHANNEL (`whatsapp.com/channel/...`):                |
-|        • Resolves real Channel Name from public OpenGraph `<meta>`      |
-|        • Uses persistent `./fb_profile` linked once via QR code         |
-|        • You do NOT need to follow the channel:                         |
-|          - If not in your Channels list, sends the invite link to your  |
-|            own `(You)` self-chat and clicks "View channel" in-app       |
-|          - Waits for `#main header` to switch to the channel preview    |
-|        • Reads the bottom-most message bubble (leaf text nodes only)    |
-|        • Converts WhatsApp `blob:` images to JPEG via HTML5 `<canvas>`  |
+| ├── FACEBOOK PAGE (`facebook.com/...`) — No Login Needed:               |
+| │   • Opens public page (`navigate_to_target_page`), dismisses overlays |
+| │   • Scrolls ~450px, expands "See more" on `[role="article"]`          |
+| │   • Extracts clean caption from `[data-ad-preview="message"]`         |
+| │   • Strips UI labels ("See more", "See less", "View all X replies")   |
+| │   • Unwraps `l.facebook.com/l.php?u=...` links & strips `fbclid`      |
+| │   • Downloads first content photo (`scontent`, >200x200px) OR         |
+| │     falls back to external link preview thumbnail (`fbcdn`)           |
+| │                                                                       |
+| └── WHATSAPP CHANNEL (`whatsapp.com/channel/...`) — No Follow Needed:   |
+|     • Single-post links (`/channel/<id>/<msg>`): reads public OG tags   |
+|     • Full channels (`/channel/<id>`): opens `web.whatsapp.com` in      |
+|       `fb_profile/`, dismisses modals, checks Channels list, or drops   |
+|       invite link into `(You)` self-chat and clicks "View channel" to   |
+|       open Preview Mode without following                               |
+|     • Reads leaf text nodes (`leafNodes`) of bottom message bubble      |
+|     • Exports `blob:` images to JPEG via HTML5 `<canvas>`               |
 +-------------------------------------------------------------------------+
                                     │
                                     ▼
 +-------------------------------------------------------------------------+
-| 3. SHA-256 DEDUPLICATION (agent_memory.db -> `seen_posts`)              |
-|    - Hashes `caption + external_link`                                   |
-|    - If hash already exists in `seen_posts`:                            |
-|      • Marks link status as "Up to date (no new post)" and skips        |
-|    - If hash is brand new:                                              |
-|      • Proceeds to Elo54 Post Organizer                                 |
+| STAGE 3: SHA-256 DEDUPLICATION (agent_memory.db -> `seen_posts`)        |
+| • Hashes `caption|external_link` (prefixed `WA|` for WhatsApp)          |
+| • If `is_post_seen(hash)` is True: updates `last_status` and skips      |
 +-------------------------------------------------------------------------+
                                     │
                                     ▼
 +-------------------------------------------------------------------------+
-| 4. ELO54 POST ORGANIZER & 4-TIER LOCATION DETECTOR                      |
-|    - Category : "News / Gist"                                           |
-|    - Location : 4-Tier Detection (`detect_actual_location`)             |
-|      • Tier 1 : 35+ Nigerian Universities/Polytechnics & Abbreviations  |
-|                 (UNILAG, FUOYE, UI, FUTA, OAU, ABU, BUK, UNN, LASU...)  |
-|      • Tier 2 : All 36 Nigerian States + FCT + Major Cities             |
-|      • Tier 3 : Foreign / Global Cities, US States & Countries          |
-|                 (Florida, San Francisco, Seattle, UK, South Africa...)  |
-|      • Tier 4 : If uncertain / no location mentioned -> leaves BLANK    |
-|    - Headline : First factual sentence (<= 140 chars, no ALL CAPS)      |
-|    - Details  : Clean paragraphs (no duplicate lines, no bare URLs,     |
-|                 no trailing "Read more:" or empty "LinkedIn:/X:" lines) |
-|    - Source   : External article/registration link placed exclusively   |
-|                 into `Source / Registration Link (optional)`            |
+| STAGE 4: ORGANIZER & 4-TIER LOCATION DETECTOR (agent.py)                |
+| • Category : `News / Gist`                                              |
+| • Location : `detect_actual_location()` checks:                         |
+|     Tier 1 — 30+ Nigerian universities & polytechnics (UNILAG, FUOYE…)  |
+|     Tier 2 — All 36 Nigerian states, FCT & major cities                 |
+|     Tier 3 — International cities, US states & countries                |
+|     Tier 4 — Leaves blank (`""`) if no explicit location is detected    |
+| • Headline : First factual sentence (no ALL CAPS, max 140 chars)        |
+| • Details  : Clean paragraphs (no URLs, no trailing "Read more:",       |
+|              no empty "LinkedIn:/Facebook:/X:/TikTok:/YouTube:" lines)  |
+| • Source   : External article/registration link (ignores invite links)  |
 +-------------------------------------------------------------------------+
                                     │
                                     ▼
 +-------------------------------------------------------------------------+
-| 5. PUBLISH VIA "+ Post News / Event" MODAL                              |
-|    - Opens `http://127.0.0.1:5000/`                                     |
-|    - Clicks `#open-post-modal-btn` ("+ Post News / Event")              |
-|    - Fills the "Shine a Light on Your Campus or City" modal fields      |
-|    - Attaches `temp_post_image.jpg` to `#post-image`                    |
-|    - Clicks `#publish-btn` ("Send for Review")                          |
-|    - Saves hash in `agent_memory.db` & auto-refreshes the live feed     |
+| STAGE 5: MODAL PUBLISHING & LIVE FEED REFRESH                           |
+| • Opens `http://127.0.0.1:<PORT>/`, clicks `#open-post-modal-btn`       |
+| • Fills `#post-headline`, `#post-text`, `#campus-city`, `#post-image`,  |
+|   and `#source-link`, then clicks `#publish-btn` ("Send for Review")    |
+| • Frontend polls `/agent-status` every 3s and reloads when new posts    |
+|   arrive                                                                |
 +-------------------------------------------------------------------------+
 ```
 
 ---
 
-## 3. Database Schema
+## 4. Private Admin WhatsApp QR Linker (`/admin/whatsapp-qr`)
 
-### A. `sandbox_posts.db` (Application Database)
-1. **`posts` Table:**
-   * `id` (`INTEGER PRIMARY KEY AUTOINCREMENT`)
-   * `author` (`TEXT`)
-   * `category` (`TEXT` — `'News / Gist'`, `'Event'`, `'Opportunity'`)
-   * `campus_city` (`TEXT NULL` — detected campus/city/country, or `NULL` if unknown)
-   * `headline` (`TEXT` — max 140 characters)
-   * `content` (`TEXT` — cleaned post details)
-   * `image_filename` (`TEXT NULL` — stored in `static/uploads/`)
-   * `youtube_link` (`TEXT NULL`)
-   * `source_url` (`TEXT NULL` — external article or registration link)
-   * `created_at` (`TEXT`)
-2. **`watched_pages` Table:**
-   * `id` (`INTEGER PRIMARY KEY AUTOINCREMENT`)
-   * `fb_url` (`TEXT UNIQUE` — Facebook Page or WhatsApp Channel URL)
-   * `label` (`TEXT` — auto-resolved page/channel display name)
-   * `enabled` (`INTEGER` — `1` active, `0` paused)
-   * `last_checked_at` (`TEXT`)
-   * `last_status` (`TEXT` — live scan result)
-   * `created_at` (`TEXT`)
-3. **`settings` Table:**
-   * `autopilot_enabled` (`"1"` ON by default)
-   * `poll_interval_minutes` (`"5"` minutes by default)
-   * `headless_mode` (`"0"` visible browser, `"1"` silent background mode)
+When deployed on a cloud container or headless server where you cannot see the server's Chromium desktop window directly:
 
-### B. `agent_memory.db` (Deduplication Database)
-* **`seen_posts` Table:**
-  * `post_hash` (`TEXT PRIMARY KEY` — SHA-256 hash of extracted post)
-  * `post_preview` (`TEXT` — first 200 characters)
-  * `published_at` (`TIMESTAMP`)
+1. **Public Frontpage Stays Clean:** Regular visitors on `/` never see any WhatsApp QR buttons or connection prompts.
+2. **One-Time Admin Route (`GET /admin/whatsapp-qr`):**
+   * Visiting `https://<your-domain>/admin/whatsapp-qr` launches `python -u agent.py --connect-whatsapp` and redirects to `/?show_wa_qr=1`.
+   * `connect_whatsapp_interactive()` opens `https://web.whatsapp.com/` in `fb_profile/`, captures screenshots every **1.5 seconds** to `static/wa_live.png`, and writes status JSON (`starting`, `qr_ready`, `connected`) to `static/wa_status.json`.
+   * The hidden modal on `index.html` activates only when `?show_wa_qr=1` is present, polling `/wa-status` and refreshing `/static/wa_live.png?t=<timestamp>` every 1.5 seconds.
+   * Once you scan the QR code with your phone (*WhatsApp -> Linked Devices -> Link a Device*), the server waits 8 seconds for IndexedDB to flush to `fb_profile/` and saves the session permanently for all users.
+
+### Minimal Blueprint to Reuse `/admin/whatsapp-qr` in Another Project
+* **`agent.py` (`--connect-whatsapp`):** Launch `launch_persistent_context(user_data_dir="./fb_profile", headless=False)`, loop `page.screenshot(path="static/wa_live.png")`, detect `#pane-side` / `[aria-label="Channels"]`, write state JSON to `static/wa_status.json`, and wait 8s before closing.
+* **`app.py`:** Expose `GET /admin/whatsapp-qr` (spawns the script and redirects to `/?show_wa_qr=1`) and `GET /wa-status` (returns JSON state + `has_image`).
+* **`index.html`:** Keep the QR modal hidden (`display: none`) unless `window.location.search.includes("show_wa_qr=1")`, polling `/wa-status` and reloading `/static/wa_live.png?t=${Date.now()}` every 1.5 seconds.
 
 ---
 
-## 4. Setup & Commands
+## 5. JSON Feed & Endpoints
 
-### Install Dependencies
+* **`GET /`** — Main Elo54 Pulse Dashboard, Watchlist, `+ Post News / Event` modal, and Live Feed.
+* **`GET /api/posts.json`** — Returns up to the 100 latest posts as JSON (`{"count": N, "posts": [...]}`) with full `image_url` paths.
+* **`GET /agent-status`** — Returns live Auto-Pilot countdown, `running` state, post count, and `watched_pages` statuses.
+* **`GET /admin/whatsapp-qr`** — Private admin-only URL to link WhatsApp Web once via live QR stream.
+
+---
+
+## 6. Local Setup & Render Cloud Deployment
+
+### Run Locally
 ```powershell
 pip install -r requirements.txt
 playwright install chromium
+python -u app.py
 ```
+* Dashboard: `http://127.0.0.1:5000/`
+* JSON API: `http://127.0.0.1:5000/api/posts.json`
+* Private Admin WhatsApp QR: `http://127.0.0.1:5000/admin/whatsapp-qr`
 
-### Start the Web App & 5-Minute Auto-Pilot
+### Useful CLI Modes (`agent.py`)
 ```powershell
-python app.py
+python -u agent.py --watch-cycle                  # Scan all enabled watchlist URLs once
+python -u agent.py https://www.facebook.com/bbcnews
+python -u agent.py https://whatsapp.com/channel/0029VaC48eP6GcG5EiHXyu18
+python -u agent.py --connect-whatsapp             # Stream WhatsApp Web QR to static/wa_live.png
+python -u agent.py --daemon                       # Standalone 5-minute polling loop
 ```
-* Open **http://127.0.0.1:5000** in your browser.
-* Paste any **Facebook Page link** (`https://www.facebook.com/...`) or **WhatsApp Channel link** (`https://whatsapp.com/channel/...`) into the input box and click **`+ Add Link & Check`**.
 
-### Useful CLI Commands for `agent.py`
-```powershell
-# 1. Run a full watch cycle across all enabled Facebook & WhatsApp links
-python agent.py --watch-cycle
-
-# 2. Check a single Facebook Page or WhatsApp Channel URL immediately
-python agent.py https://www.facebook.com/bbcnews
-python agent.py https://whatsapp.com/channel/0029VaC48eP6GcG5EiHXyu18
-
-# 3. Connect or re-link WhatsApp Web via live QR code stream
-python agent.py --connect-whatsapp
-# (Then view the live QR code at http://127.0.0.1:5000/?show_wa_qr=1)
-
-# 4. Run a standalone continuous 5-minute daemon in a separate terminal
-python agent.py --daemon
-```
+### Render Docker Deployment (`Dockerfile` & `render.yaml`)
+* Base image: `mcr.microsoft.com/playwright/python:v1.48.0-noble` with `xvfb`, `xauth`, and `procps`.
+* Starts `Xvfb :99` (`DISPLAY=:99`) in the background and executes `python -u app.py` bound to `0.0.0.0:$PORT` (`PORT=10000` in `render.yaml`).
+* On Linux containers, `agent.py` passes `--no-sandbox` and `--disable-dev-shm-usage` and cleans stale Chromium lock files (`SingletonLock`, `SingletonSocket`, `SingletonCookie`) via `release_stale_profile_lock()`.
